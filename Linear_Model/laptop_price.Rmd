@@ -1,0 +1,900 @@
+---
+title: "Linear Model and Regularization"
+author: "Arga Adyatama"
+date: "6/6/2021"
+output: 
+ html_document:
+   df_print: paged
+   highlight: zenburn
+   toc: true
+   toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r echo=FALSE}
+library(reticulate)
+```
+
+# Linear Model and Regularization
+
+Linear model is one of the most simple machine learning algorithm. People often getting attracted to more advanced model such as Neural Network or Gradient Boosting due to the hype and the predictive performance. However, on most of daily business case, building a linear model is good enough. Linear model is also comes with the benefit of being interpretable, compared to the black box Neural Network. On this occasion, we will build a linear model with the addition of regularization to analyze the data while still get a great predictive performance.
+
+## Library and Setup
+
+All source code for this article is provided at [my github repo](https://github.com/Argaadya/python_ml)
+
+```{python}
+# Data Wrangling
+import pandas as pd
+import numpy as np
+
+# Regex
+import re
+
+# Statistics
+import scipy.stats as stats
+
+# Data Preprocessing
+from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.preprocessing import StandardScaler
+
+# Model Evaluation
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error
+from sklearn.metrics import r2_score
+
+# Machine Learning Model
+from sklearn.linear_model import LinearRegression
+from sklearn.linear_model import Lasso
+from sklearn.linear_model import Ridge
+from sklearn.linear_model import LassoCV
+from sklearn.linear_model import RidgeCV
+from sklearn.linear_model import ElasticNetCV
+
+# Data Visualization
+import matplotlib.pyplot as plt
+import seaborn as sns
+```
+
+# Case Study: Laptop Price Prediction
+
+On this occasion, we will try to understand what makes a price of a laptop to increase by building a linear model. For a computer geek or people who manufactured laptops may already now the production cost of each component. However, for a lay people like us who only know how to use the laptop, exploring this dataset and building a machine learning model around it will help us to compare laptop with various specifications and build by various companies. We may also see some intangible factors that can affect the price, such as the value of a brand like Apple or the CPU component such us Intel Core vs AMD.
+
+## Data
+
+The data come from [Laptop Company Price List](https://www.kaggle.com/muhammetvarl/laptop-price) with the following dictionary:
+
+- **Company**: Laptop Manufacturer
+- **Product**: Brand and Model
+- **TypeName**: Type (Notebook, Ultrabook, Gaming, etc.)
+- **Inches**: Screen Size
+- **ScreenResolution**: Screen Resolution
+- **Cpu**: Central Processing Unit (CPU)
+- **Ram**: Laptop RAM
+- **Memory**: Hard Disk / SSD Memory
+- **GPU**: Graphics Processing Units (GPU)
+- **OpSys**: Operating System
+- **Weight**: Laptop Weight
+- **Price_euros**: Price in Euro
+
+```{python}
+laptop = pd.read_csv('data/laptop_price.csv')
+
+laptop.head()
+```
+
+Let's check the dimension of the data.
+
+```{python}
+laptop.shape
+```
+
+Let's check the data type of each column. See if there is any incompatible column data type.
+
+```{python}
+laptop.dtypes
+```
+
+Some column should be numerical, such as the RAM and memory. Those columns is still in string format and have non-numeric characters. We will clean the data later before building the model.
+
+Let's check if there is any duplicated data.
+
+```{python}
+laptop[ laptop.duplicated()].shape
+```
+
+Based on the finding, we will have 0 observation of duplicated data.
+
+Let's check if there is any missing value from each column.
+
+```{python}
+laptop.isnull().sum(axis = 0)
+```
+
+Based on the result, we find that there is no missing value in any column on our dataset.
+
+## Data Wrangling
+
+Although the information given from the dataset is quite comprehensive, we need to transform the data to a proper format to build a machine learning.
+
+### Transforming Weight
+
+The first we do is removing the weight unit (kg) from the `Weight` column and tranform the value into float/numeric.
+
+```{python}
+# Remove "kg" from the weight
+laptop['Weight'] = list(map(lambda x: float(re.sub('kg', '', x)), laptop['Weight']))
+
+laptop.head()
+```
+
+Let's check if there is any missing value as a result of our data wrangling process on the `Weight` column.
+
+```{python}
+laptop['Weight'].isnull().sum()
+```
+
+### Transforming RAM
+
+The next thing we do is removing the unit `GB` from the `Ram` column and transform the value into integer.
+
+```{python}
+laptop['Ram'] = list(map(lambda x: int(re.sub('GB', '', x)), laptop['Ram']))
+
+laptop.head()
+```
+
+### Transforming Memory
+
+Now we will separate the `Memory` column into 3 different columns: SSD, HDD, and Flash based on the type of the storage system. The first thing we do is to find the specific storage type, for example SSD, and extract the value. If a laptop does not have any SSD, the value will be empty.
+
+Here I use the regex pattern `\d+` which means digits (0-9) followed by the unit size of the storage (GB/TB) and ended with SSD to indicate that we only looking for SSD system.
+
+```{python}
+temp_ssd = list(map(lambda x: re.findall('\d+GB SSD|\d+TB SSD', x), laptop['Memory']))
+
+temp_ssd[0:10]
+```
+
+The next thing we do is converting the string into proper numeric storage size value. If we find laptop with a TB size of storage, we will convert it into GB by multiply the value with 1000. Some laptops may have 2 separate SSD embedded, such as 256GB SSD + 256GB SSD. To simplify the problem, we just sum the value.
+
+```{python}
+final_ssd = []
+
+for i in range(len(temp_ssd)):
+
+    for j in range(len(temp_ssd[i])):
+        if re.search('TB', temp_ssd[i][j]):
+            temp_ssd[i][j] = int(re.sub('TB SSD', '', temp_ssd[i][j]))*1000 # Convert TB to GB
+        else:
+            temp_ssd[i][j] = int(re.sub('GB SSD', '', temp_ssd[i][j])) 
+    
+    final_ssd.append( np.sum(temp_ssd[i])) # Sum the SSD Memory Storage
+
+final_ssd[0:10]
+```
+
+We will do the same thing with the HDD and Flash Storage.
+
+```{python}
+# HDD Storage
+temp_hdd = list(map(lambda x: re.findall('\d+GB HDD|\d+TB HDD', x), laptop['Memory']))
+final_hdd = []
+
+for i in range(len(temp_hdd)):
+
+    for j in range(len(temp_hdd[i])):
+        if re.search('TB', temp_hdd[i][j]):
+            temp_hdd[i][j] = int(re.sub('TB HDD', '', temp_hdd[i][j]))*1000 # Convert TB to GB
+        else:
+            temp_hdd[i][j] = int(re.sub('GB HDD', '', temp_hdd[i][j])) 
+    
+    final_hdd.append( np.sum(temp_hdd[i])) # Sum the total hdd Memory Storage
+
+# Flash Storage
+temp_flash = list(map(lambda x: re.findall('\d+GB Flash|\d+TB Flash', x), laptop['Memory']))
+final_flash = []
+
+for i in range(len(temp_flash)):
+
+    for j in range(len(temp_flash[i])):
+        if re.search('TB', temp_flash[i][j]):
+            temp_flash[i][j] = int(re.sub('TB Flash', '', temp_flash[i][j]))*1000 # Convert TB to GB
+        else:
+            temp_flash[i][j] = int(re.sub('GB Flash', '', temp_flash[i][j])) 
+    
+    final_flash.append( np.sum(temp_flash[i])) # Sum the total flash Memory Storage
+```
+
+Finally, we will attach the processed list into the initial `laptop` dataframe.
+
+```{python}
+laptop['ssd'] = final_ssd
+laptop['hdd'] = final_hdd
+laptop['flash'] = final_flash
+
+laptop.head()
+```
+
+### Transforming CPU
+
+The next thing we do is transforming the `Cpu` column. We will separate the processor type and the processor clock speed.
+
+The processor clock speed is indicated by the number followed by the GigaHertz (GHz) unit. Let's check the number of CPU type and their respective frequency of data.
+
+```{python}
+laptop.value_counts('Cpu')
+```
+
+To simplify the processor/CPU type and prevent us from getting to many categorical class, we will only consider the general type only. For example, `Intel Core i5` and `Intel Core i5 7200U` will be considered as the same type of CPU. Let's check the result of the CPU type name cleansing process. We expect a general CPU type and try not to be to specific to reduce number of new features.
+
+```{python}
+# CPU type
+laptop_cpu = list(map(lambda x: re.findall('.*? \d+', x)[0].strip(), laptop['Cpu']))
+laptop_cpu = list(map(lambda x: re.sub(' \d+.*', '', x), laptop_cpu)) # Remove string started with numbers after whitespace
+laptop_cpu = list(map(lambda x: re.sub('[-].*', '', x), laptop_cpu)) # Remove type extension such as x-Z090 into x
+laptop_cpu = list(map(lambda x: re.sub(' [A-Z]\d+.*', '', x), laptop_cpu)) # Remove string started with capital letters followed by numbers after whitespace
+
+pd.DataFrame(laptop_cpu).value_counts()
+```
+
+We will continue by extracting the CPU clock speed.
+
+```{python}
+# CPU clock speed
+laptop_cpu_clock = list(map(lambda x: float(re.sub('GHz', '', re.findall('\d+GHz|\d+[.]\d+.*GHz', x)[0])), laptop['Cpu']))
+
+laptop_cpu_clock[0:10]
+```
+
+After we have collected the list for the processor type and the processor clock speed, we attach them to the initial dataset.
+
+```{python}
+laptop['cpu_type'] = laptop_cpu
+laptop['cpu_clock'] = laptop_cpu_clock
+
+laptop.head(10)
+```
+
+### Transforming GPU
+
+GPU is also an important part, especially for people who want to look for better gaming experience. Since there are a lot of GPU variant, we will only extract the first 2 words from the GPU type. For example, `Intel Iris` or `Intel HD`.
+
+```{python}
+# gpu_type = list(map(lambda x: re.findall('.*? ', x)[0].strip(), laptop['Gpu']))
+gpu_type = list(map(lambda x: " ".join(x.split()[0:2]), laptop['Gpu']))
+
+laptop['gpu_type'] = gpu_type
+
+laptop.head()
+```
+
+### Transforming Screen Resolution
+
+Next, we will extract information from the `ScreenResolution`. If the laptop has touchscreen feature, we will give value of `1`.
+
+```{python}
+touch_screen = []
+
+for i in range(len(laptop['ScreenResolution'])):
+    if re.search('Touchscreen', laptop['ScreenResolution'][i]):
+        touch_screen.append(1)
+    else:
+        touch_screen.append(0)
+
+touch_screen[0:20]
+```
+
+Now we will extract the screen width. A special is when the screen resolution is in 4K, where the dimension is not explicitly stated. To counter such problem, we will assume that for all laptop with 4K resolution has aspect ratio of 16:9 or 3840x2160, which is the most common 4K resolution according to [PC Monitors](https://pcmonitors.info/articles/the-4k-uhd-3840-x-2160-experience/).
+
+```{python}
+screen_width_str = list(map(lambda x: re.sub('x', '', re.findall('\d+.*?x', x)[0]), laptop['ScreenResolution']))
+screen_width = []
+
+for i in range(len(screen_width_str)):
+    if re.search('4K', screen_width_str[i]):
+       screen_width.append(3840)
+    else: 
+        screen_width.append(int(screen_width_str[i])) 
+
+screen_width[0:10]
+```
+
+We will continue extracting the width resolution of the screen.
+
+```{python}
+screen_height_str = list(map(lambda x: re.sub('x', '', re.findall('x.*\d+', x)[0]), laptop['ScreenResolution']))
+screen_height = []
+
+for i in range(len(screen_height_str)):
+    if re.search('4K', screen_height_str[i]):
+       screen_height.append(2160)
+    else: 
+        screen_height.append(int(screen_height_str[i])) 
+
+screen_height[0:10]
+```
+
+We will also extract the type of the monitor. If an observation doesn't have any type of monitor and only show the screen resolution, we will fill the monitor type with `others`.
+
+```{python}
+monitor_type = list(map(lambda x: re.sub('\d+.*x.*', '', x), laptop['ScreenResolution']))
+monitor_type = list(map(lambda x: re.sub('Touchscreen', '', x), monitor_type))
+monitor_type = list(map(lambda x: re.sub('[/]', '', x).strip(), monitor_type))
+
+for i in range(len(monitor_type)):
+    if monitor_type[i] == '':
+        monitor_type[i] = 'others'
+
+pd.DataFrame(monitor_type).value_counts()
+```
+
+Finally, we attach the screen information to the initial dataset.
+
+```{python}
+laptop['touchscreen'] = touch_screen
+laptop['screen_width'] = screen_width
+laptop['screen_height'] = screen_height
+laptop['monitor_type'] = monitor_type
+
+laptop.head()
+```
+
+## Exploratory Data Analysis
+
+After we have completed the data wrangling process, we will continue exploring the information from the dataset. Understanding the data is crucial before we start to build the machine learning model.
+
+To simplify the dataset, we will drop some columns that are not necessary for building the model.
+
+```{python}
+laptop_clean = laptop.copy()
+laptop_clean.drop(['laptop_ID', 'Product', 'TypeName', 'ScreenResolution', 'Cpu', 'Memory', 'Gpu'], axis = 1, inplace = True)
+
+laptop_clean.head()
+```
+
+### Price Between Companies
+
+Let's explore the distribution of laptop price from different companies, regardless of the laptop specs.
+
+```{python message=FALSE}
+corr_mat = laptop_clean.drop('touchscreen', axis = 1).corr()
+
+plt.pcolor(corr_mat, cmap = 'RdBu')
+plt.colorbar()
+plt.xticks(range(len(list(corr_mat.columns))), labels= list(corr_mat.columns), rotation = 90)
+plt.yticks(range(len(list(corr_mat.columns))), labels= list(corr_mat.columns))
+plt.xlabel('')
+
+plt.show()
+plt.close()
+```
+
+Based on the correlation matrix, we can see that the price (`Price_euros`) has a relatively strong correlation with the RAM while other features has low correlation with the price.
+
+### Operating System (OS)
+
+Next, we will check the number of each variant of the operating system (OS) of the laptop.
+
+```{python message=FALSE}
+laptop_agg = laptop_clean[['Price_euros', 'OpSys']].groupby('OpSys').count().\
+    rename(columns = {'Price_euros':'Frequency'}).sort_values(by = 'Frequency', ascending = False)
+
+plt.bar(x = laptop_agg.index, height = laptop_agg['Frequency'])
+
+# Insert text
+for i in range(laptop_agg.shape[0]):
+    plt.text(laptop_agg.index[i], laptop_agg['Frequency'][i], laptop_agg['Frequency'][i])
+
+plt.xticks(rotation = 90)
+plt.xlabel('OS')
+plt.ylabel('Frequency')
+plt.title('Operating System')
+
+plt.show()
+plt.close()
+```
+
+### CPU
+
+Next, we will check the frequency of each type of processor based on the CPU general type.
+
+```{python message=FALSE}
+laptop_agg = laptop_clean[['Price_euros', 'cpu_type']].groupby('cpu_type').count().\
+    rename(columns = {'Price_euros':'Frequency'}).sort_values(by = 'Frequency', ascending = False)
+
+plt.bar(x = laptop_agg.index, height = laptop_agg['Frequency'])
+
+# Insert text
+for i in range(laptop_agg.shape[0]):
+    plt.text(laptop_agg.index[i], laptop_agg['Frequency'][i], laptop_agg['Frequency'][i])
+
+plt.xticks(rotation = 90)
+plt.xlabel('CPU')
+plt.ylabel('Frequency')
+plt.title('CPU Type by Frequency')
+plt.show()
+
+plt.close()
+```
+
+Intel Core series are the most frequent processor type in the market. There are some CPU type with only 1 or 2 observations, such as the Samsung Cortex. We will label CPU type as `other` for CPU with only  observation from the data.
+
+```{python}
+low_cpu = list(laptop_agg[ laptop_agg['Frequency'] == 1].index)
+
+id_pos = list(laptop_clean['cpu_type'][laptop_clean['cpu_type'].isin(low_cpu)].index)
+
+laptop_clean.loc[id_pos, 'cpu_type'] = '1_others'
+
+laptop_clean[['cpu_type']].value_counts()
+```
+
+Let's check the price distribution for each CPU vendor.
+
+```{python message=FALSE}
+sns.boxplot(data = laptop_clean, y = 'cpu_type', x = 'Price_euros')
+plt.ylabel('CPU Type')
+plt.xlabel('Price in Euro')
+plt.show()
+plt.close()
+```
+
+Based on the boxplot, we can see that Intel Xeon, Intel Core i7, and AMD Ryzen has higher median compared to other processor. The most expensive laptops are build with Intel Core i7 based on the outliers.
+
+### GPU
+
+We will continue by checking the type of the GPU.
+
+```{python message=FALSE}
+laptop_agg = laptop_clean[['Price_euros', 'gpu_type']].groupby('gpu_type').count().\
+    rename(columns = {'Price_euros':'Frequency'}).sort_values(by = 'Frequency', ascending = False)
+
+plt.bar(x = laptop_agg.index, height = laptop_agg['Frequency'])
+
+# Insert text
+for i in range(laptop_agg.shape[0]):
+    plt.text(laptop_agg.index[i], laptop_agg['Frequency'][i], laptop_agg['Frequency'][i])
+
+plt.xticks(rotation = 90)
+plt.xlabel('GPU')
+plt.ylabel('Frequency')
+plt.title('GPU Type by Frequency')
+plt.show()
+
+plt.close()
+```
+
+Intel HD is the most common, followed by the NVidia GeForce series. We will also group all GPU that only has 1 observation as `others`.
+
+```{python}
+low_gpu = list(laptop_agg[ laptop_agg['Frequency'] == 1].index)
+
+id_pos = list(laptop_clean[ laptop_clean['gpu_type'].isin(low_gpu)].index)
+
+laptop_clean.loc[id_pos, 'gpu_type'] = '1_others'
+
+laptop_clean[['gpu_type']].value_counts()
+```
+
+We will also check the price distribution of each GPU type.
+
+```{python message = F}
+sns.boxplot(data = laptop_clean, y = 'gpu_type', x = 'Price_euros')
+plt.ylabel('GPU Vendor')
+plt.xlabel('Price in Euro')
+plt.show()
+plt.close()
+```
+
+Based on the distribution of each boxplot, laptop with NVidia GPU is slightly more pricy compared to other vendor. From the outliers, combined with the information from the previous CPU vendor price distribution, we can see that laptop with Intel process and NVidia GPU has higher price. This is kinda expected since most gaming laptop tend to have NVidia GPU and Intel processor. To check this argument, we will explore the laptop with price higher than 3000 Euro and see the combination of the CPU and GPU.
+
+```{python}
+laptop[['Company', 'Product', 'Cpu', 'Gpu']][ laptop['Price_euros'] > 3000]
+```
+
+We can see that all of the laptop with price higher than 3000 Euro has Intel Core i7 or higher as the processor and NVidia as the GPU. We have done the exploratory data analysis to understand our data, now we will start to build the machine learning model.
+
+## One-Hot Encoding
+
+Before we split the data into data training and data testing, now we will convert the categorical variable into dummy features by using one-hot encoding so that it can be processed by the machine learing model.
+
+The following columns will be transformed:
+
+- cpu_type
+- gpu_type
+- OpSys (OS)
+
+First, we will convert the category into integer number using the label encoding. For example, AMD will be 0, Intel will be 1, etc. After the data is converted, we then apply the one-hot encoding and convert the result into an array. The `drop='first'` will remove the first category from the encoding, so if we have 5 different categories in the column, we will only get 4 new columns from the result of one-hot encoding. Since we name the `others` category as `1_others`, it will be removed during the encoding process, allowing us to predict any new type of category that is not present in the current dataset.
+
+```{python}
+# Convert Category into Integer
+cpu_label = LabelEncoder().fit(laptop_clean['cpu_type']).transform(laptop_clean['cpu_type'])
+cpu_label = cpu_label.reshape(len(laptop_clean['cpu_type']), 1)
+
+# Convert Label into One Hot Encoding
+cpu_label = OneHotEncoder(drop = 'first').fit(cpu_label).transform(cpu_label).toarray()
+
+cpu_label
+```
+
+To help us during model interpretation, we will collect the cpu category as the column name for later purpose. One hot encoding will use alphabetical order everytime it convert the categorical data.
+
+```{python}
+cpu_name = list(set(laptop_clean['cpu_type']))
+cpu_name.sort()
+cpu_name = list(map(lambda x: 'cpu_' + x, cpu_name))
+cpu_name = cpu_name[ 1:len(cpu_name) ]
+
+cpu_onehot = pd.DataFrame(cpu_label, columns = cpu_name)
+
+cpu_onehot.head()
+```
+
+Finally, we will create a dataframe from the one hot encoding and add them into the dataset.
+
+```{python}
+laptop_clean = pd.concat([laptop_clean.reset_index(drop = True), cpu_onehot], axis = 1)
+
+laptop_clean.head()
+```
+
+We will do the same thing for the GPU type, company and the OS.
+
+```{python}
+# Convert Category into Integer
+gpu_label = LabelEncoder().fit(laptop_clean['gpu_type']).transform(laptop_clean['gpu_type'])
+gpu_label = gpu_label.reshape(len(laptop_clean['gpu_type']), 1)
+
+# Convert Label into One Hot Encoding
+gpu_label = OneHotEncoder(drop = 'first').fit(gpu_label).transform(gpu_label).toarray()
+
+# Create Column name
+gpu_name = list(set(laptop_clean['gpu_type']))
+gpu_name.sort()
+gpu_name = list(map(lambda x: 'gpu_' + x, gpu_name))
+gpu_name = gpu_name[ 1:len(gpu_name) ]
+
+# Concat the Column
+gpu_onehot = pd.DataFrame(gpu_label, columns = gpu_name)
+
+laptop_clean = pd.concat([laptop_clean.reset_index(drop = True), gpu_onehot], axis = 1)
+
+laptop_clean.head()
+```
+
+```{python}
+# Convert Category into Integer
+os_label = LabelEncoder().fit(laptop_clean['OpSys']).transform(laptop_clean['OpSys'])
+os_label = os_label.reshape(len(laptop_clean['OpSys']), 1)
+
+# Convert Label into One Hot Encoding
+os_label = OneHotEncoder(drop = 'first').fit(os_label).transform(os_label).toarray()
+
+# Create Column name
+os_name = list(set(laptop_clean['OpSys']))
+os_name.sort()
+os_name = list(map(lambda x: 'os_' + x, os_name))
+os_name = os_name[ 1:len(os_name) ]
+
+# Concat the Column
+os_onehot = pd.DataFrame(os_label, columns = os_name)
+
+laptop_clean = pd.concat([laptop_clean.reset_index(drop = True), os_onehot], axis = 1)
+
+laptop_clean.head()
+```
+
+```{python}
+# Convert Category into Integer
+company_label = LabelEncoder().fit(laptop_clean['Company']).transform(laptop_clean['Company'])
+company_label = company_label.reshape(len(laptop_clean['Company']), 1)
+
+# Convert Label into One Hot Encoding
+company_label = OneHotEncoder(drop = 'first').fit(company_label).transform(company_label).toarray()
+
+# Create Column name
+company_name = list(set(laptop_clean['Company']))
+company_name.sort()
+company_name = list(map(lambda x: 'company_' + x, company_name))
+company_name = company_name[ 1:len(company_name) ]
+
+# Concat the Column
+company_onehot = pd.DataFrame(company_label, columns = company_name)
+
+laptop_clean = pd.concat([laptop_clean.reset_index(drop = True), company_onehot], axis = 1)
+
+laptop_clean.head()
+```
+
+Finally, we will once again drop the unncessary columns and only take the numeric columns.
+
+```{python}
+laptop_clean = laptop_clean.select_dtypes(include = 'number')
+laptop_clean.columns = list(map(lambda x: re.sub(' ', '_', x), laptop_clean.columns))
+
+laptop_clean.head()
+```
+
+## Train Test Split
+
+We will start splitting the data intro training and testing dataset. We will use 20% of the data as the testing dataset.
+
+```{python}
+x_laptop = laptop_clean.drop('Price_euros', axis = 1)
+y_laptop = laptop_clean['Price_euros']
+
+x_train, x_test, y_train, y_test = train_test_split(x_laptop, y_laptop, test_size = 0.2, random_state = 100)
+
+print("Number of Data Train: " + str(x_train.shape[0]))
+print("Number of Data Test: " + str(x_test.shape[0]))
+```
+
+## Model Fitting
+
+We will start building machine learning model. We will build the following model and compare the predictive performance:
+
+- Linear Regression
+- Lasso Regression 
+- Ridge Regression 
+- Elastic Net Regression
+
+### Linear Regression
+
+First, we fit the OLS (Ordinary Least Square) linear regression into the training dataset. OLS will try to find the best coefficient for the intercept and each feature by minimizing the **Sum of Squared Error** as the lost function.
+
+$$
+SSE = \Sigma_{i=1}^n (y - \overline y)^2
+$$
+
+```{python eval=F}
+lm_model = LinearRegression().fit(x_train, y_train)
+```
+
+```{python echo = F}
+import pickle
+with open("output/linear_reg.pkl", 'rb') as file:
+    lm_model = pickle.load(file)
+```
+
+
+Let's check the estimate coefficients for each features, see how big the association between the features and the laptop price. We will only highlight features with the highest (top 10) and the lowest (bottom 10) coefficient value due to limited visualization space.
+
+```{python}
+coef_lm = pd.DataFrame({'features': x_train.columns, 'estimate':lm_model.coef_}).sort_values(by = 'estimate', ascending = False)
+top_last10 = coef_lm.iloc[np.r_[0:10, -10:0]]
+
+sns.barplot(data = top_last10, x = 'estimate', y = 'features')
+plt.xlabel('Estimate Coefficients')
+plt.ylabel('Features')
+plt.show()
+plt.close()
+```
+
+Based on the top 10 highest and lowest coefficient of each feature, we can see that certain type of CPUs will lower the predicted price due to the negative value of the estimate coefficient. For example, laptop installed with AMD FX or Intel Pentium Dual Core will have lower price compared to laptop that is installed with Intel Xeon. If the laptop is build by Razer, the predicted price will increase by around 1250 Euros.
+
+#### Model Evaluation
+
+Let's check the prediction performance of the linear regression. We will use the R-squared (R2 Score) and the error measured by Root Mean Squared Error (RMSE). RMSE is a good measure to evaluate regression problem because they punish model more if there are observations that has high error.
+
+```{python}
+pred_lm = lm_model.predict(x_test)
+
+print('R2 Score: ' + str(np.round(r2_score(y_test, pred_lm), 3)))
+print('RMSE: ' + str(np.round(np.sqrt(mean_squared_error(y_test, pred_lm)), 3)) )
+print('Price Standard Deviation: ' + str(np.round(np.std(y_test), 3)))
+```
+
+We can compare the RMSE with the standard deviation of the price variable from the testing dataset. According to [Bowles](https://www.amazon.com/Machine-Learning-Spark-Python-Techniques/dp/1119561930), if the RMSE is lower than the standard deviation, then we can conclude that the model has a good performance. A good model should, on average, have better predictions than the naive estimate of the mean for all predictions.
+
+### Lasso Regression
+
+Lasso regression is a variant of linear regression that comes with a penalty on the loss function to help the model do regularization and reduce the model variance. Model with less variance will be better at predicing new data. The idea is to induce the penalty against complexity by adding the regularization term such as that with increasing value of regularization parameter, the weights get reduced (and, hence penalty induced).
+
+As you may have learn before, linear regression try to get the best estimate value for the model intercept and slope for each feature by minimizing the Sum of Squared Error (SSE). 
+
+$$
+SSE = \Sigma_i^N (y_i - \hat y_i)^2
+$$
+
+Lasso Regression will add an L1 penalty with $\lambda$ constant to the loss function. If $\lambda$ equals zero, then the lasso regression become identical with the ordinary linear regression.
+
+$$
+SSE = \Sigma_{i=1}^N (y_i - \hat y_i)^2 + \lambda\ \Sigma_{j=1}^n |\beta_j|
+$$
+
+The benefit of using Lasso is that it can function as a feature selection method. This model will shrink and sometimes remove features so that we only have the features that affect the target data. To fit a Lasso model, we need to scale all features. The features need to have the same scale so that the coefficient values are chosen based only on which attribute is most useful, not on the basis of which one has the most favorable scale.
+
+```{python}
+# Scale Features
+x_scaler = StandardScaler().fit(x_train.to_numpy())
+
+# Transform Data
+x_train_norm = x_scaler.transform(x_train.to_numpy())
+x_test_norm = x_scaler.transform(x_test.to_numpy())
+```
+
+The first thing we need to do to build a Lasso model is by choosing the appropriate value of $\lambda$ as the penalty constant. Luckily, the `sklearn` package has build in estimator can help us get the optimal hyper-parameter (in this case, $\lambda$ or $\alpha$) with Cross-Validation method to evaluate the model.
+
+In the following step, we set 10-Fold Cross-Validation method to fit and evaluate the data and try 1000 different alpha ($\lambda$) as the penalty constant. The model will give us the best alpha to choose.
+
+```{python}
+lasso_model_cv = LassoCV(cv = 10, n_alphas = 1000).fit(x_train_norm, y_train)
+
+print('Best alpha: ' + str(np.round(lasso_model_cv.alpha_, 5)))
+```
+
+We can directly predict new data using the previously fitted model. Let's evaluate the model on the unseen testing dataset.
+
+```{python}
+pred_lasso = lasso_model_cv.predict(x_test_norm)
+
+print('R2 Score: ' + str(np.round(r2_score(y_test, pred_lasso), 3)))
+print('RMSE: ' + str(np.round(np.sqrt(mean_squared_error(y_test, pred_lasso)), 3)) )
+print('Price Standard Deviation: ' + str(np.round(np.std(y_test), 3)))
+```
+
+You can also try to refit the data into new Lasso model with the best alpha as the input. The result is the same.
+
+```{python eval = F}
+lasso_model = Lasso(alpha = lasso_model_cv.alpha_).fit(x_train_norm, y_train)
+
+pred_lasso = lasso_model.predict(x_test_norm)
+
+print('R2 Score: ' + str(np.round(r2_score(y_test, pred_lasso), 3)))
+print('RMSE: ' + str(np.round(np.sqrt(mean_squared_error(y_test, pred_lasso)), 3)) )
+print('Price Standard Deviation: ' + str(np.round(np.std(y_test), 3)))
+```
+
+Let's visualize on how the different value of $\lambda$ will affect the estimate of coefficient for each feature. Here we use $\lambda$ from 0.0001 to 600 and fit the lasso regression.
+
+```{python}
+nbins = 1000
+list_lambda = np.linspace(1e-4, 600, nbins)
+
+list_coef = np.zeros((nbins, x_train.shape[1]))
+
+for i in range(len(list_lambda)):
+    lasso_reg = Lasso(alpha = list_lambda[i]).fit(x_train_norm, y_train)
+    list_coef[i, :] = lasso_reg.coef_
+
+df_coef = pd.DataFrame(list_coef, columns = x_train.columns)
+
+df_coef.head()
+```
+
+Now we will visualize the result.
+
+```{python}
+for i in df_coef.columns:
+    plt.plot(list_lambda, df_coef[i])
+plt.xlabel('Lambda Hyper-Parameter')
+plt.ylabel('Standardized Coefficients')
+
+plt.show()
+plt.close()
+```
+
+With bigger $\lambda$, more features will be omitted or will have estimate coefficient of 0 and only retain the most important features. With $\lambda$ = 400, only 1 feature remain.
+
+Now check the remaining feature for $\lambda$ > 100. Note that the coefficient is already normalized.
+
+```{python}
+print('lambda: ' + str(list_lambda[200]))
+print('\nRemaining features')
+df_coef.iloc[200][ np.abs(df_coef.iloc[200]) > 0]
+```
+
+Let's check the remaining feature for $\lambda$ > 200.
+
+```{python}
+print('lambda: ' + str(list_lambda[340]))
+print('\nRemaining features')
+df_coef.iloc[300][ np.abs(df_coef.iloc[300]) > 0]
+```
+
+### Ridge Regression
+
+Ridge regression is similar with Lasso by creating a penalty toward the lost function. The difference is that the ridge regression will square the coefficient instead of making it absolute for the penalty. Larger value of $\lambda$ will make the coefficient to be smaller, but never reach to 0 in Ridge regression.
+
+$$
+SSE = \Sigma_{i=1}^N (y_i - \hat y_i)^2 + \lambda\ \Sigma_{j=1}^n \beta_j^2
+$$
+
+In the following process, I set the possible alpha values from 0.0001 to 100 with different steps.
+
+```{python}
+alpha_range = [1e-4, 1e-3, 1e-2, 0.1, 1]
+alpha_range.extend(np.arange(10, 100, 1))
+
+ridge_model_cv = RidgeCV(cv = 10, alphas = alpha_range).fit(x_train_norm, y_train)
+
+ridge_model_cv.alpha_
+```
+
+Let's evaluate the model.
+
+```{python}
+pred_ridge = ridge_model_cv.predict(x_test_norm)
+
+print('R2 Score: ' + str(np.round(r2_score(y_test, pred_ridge), 3)))
+print('RMSE: ' + str(np.round(np.sqrt(mean_squared_error(y_test, pred_ridge)), 3)) )
+print('Price Standard Deviation: ' + str(np.round(np.std(y_test), 3)))
+```
+
+If the lasso regression can remove unnecessary feature by making the coefficient to 0 one by one, ridge regression will shrink all coeffients but it will never reach absolute zero.
+
+```{python}
+nbins = 1000
+list_lambda = np.linspace(1e-4, 1e5, nbins)
+
+list_coef = np.zeros((nbins, x_train.shape[1]))
+
+for i in range(len(list_lambda)):
+    ridge_reg = Ridge(alpha = list_lambda[i]).fit(x_train_norm, y_train)
+    list_coef[i, :] = ridge_reg.coef_
+
+df_coef = pd.DataFrame(list_coef, columns = x_train.columns)
+
+for i in df_coef.columns:
+    plt.plot(list_lambda, df_coef[i])
+plt.xlabel('Alpha Hyper-Parameter')
+plt.ylabel('Standardized Coefficients')
+plt.show()
+plt.close()
+```
+
+### Elastic Net Regression
+
+Elastic Net combine both L1 penalty and the L2 penalty into a single formula. This combination allows for learning a sparse model where few of the weights are non-zero like Lasso, while still maintaining the regularization properties of Ridge.
+
+In the following example, we can set the ratio between the L1 and L2 penalty. If `l1_ratio` = 0, then the model will be Ridge regression while if `l1_ratio` = 1 then the model become Lasso regression.
+
+```{python}
+elastic_model_cv = ElasticNetCV(l1_ratio = 0.5, n_alphas = 1000).fit(x_train_norm, y_train)
+
+elastic_model_cv.alpha_
+```
+
+Let's evaluate the model.
+
+```{python}
+pred_elastic = elastic_model_cv.predict(x_test_norm)
+
+print('R2 Score: ' + str(np.round(r2_score(y_test, pred_elastic), 3)))
+print('RMSE: ' + str(np.round(np.sqrt(mean_squared_error(y_test, pred_elastic)), 3)) )
+print('Price Standard Deviation: ' + str(np.round(np.std(y_test), 3)))
+```
+
+Different `l1_ratio` will give us different model performance.
+
+```{python}
+elastic_model_cv = ElasticNetCV(l1_ratio = 0.8, n_alphas = 1000).fit(x_train_norm, y_train)
+
+pred_elastic = elastic_model_cv.predict(x_test_norm)
+
+print('R2 Score: ' + str(np.round(r2_score(y_test, pred_elastic), 3)))
+print('RMSE: ' + str(np.round(np.sqrt(mean_squared_error(y_test, pred_elastic)), 3)) )
+print('Price Standard Deviation: ' + str(np.round(np.std(y_test), 3)))
+```
+
+We can put multiple `l1_ratio` to try with list.
+
+```{python}
+elastic_model_cv = ElasticNetCV(l1_ratio = [0.05, 0.1, 0.2, 0.3, 0.7, 0.8, 0.9, 0.95], n_alphas = 1000).fit(x_train_norm, y_train)
+
+pred_elastic = elastic_model_cv.predict(x_test_norm)
+
+print('Chosen L1 ratio: ', elastic_model_cv.l1_ratio_)
+print('R2 Score: ' + str(np.round(r2_score(y_test, pred_elastic), 3)))
+print('RMSE: ' + str(np.round(np.sqrt(mean_squared_error(y_test, pred_elastic)), 3)) )
+print('Price Standard Deviation: ' + str(np.round(np.std(y_test), 3)))
+```
+
+# Conclusion
+
+Based on our result, all regularization method works better than the vanilla linear regression, with the Elastic Net achieve the lowest error on testing dataset. We also see that even with linear model we can achieve good result, as the RMSE of each model is still better than the standard deviation of the testing dataset. We have also learn how Lasso and Ridge regression remove or shrink the coefficient of each feature.
