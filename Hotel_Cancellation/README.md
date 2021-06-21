@@ -15,7 +15,17 @@ The data come from [Antonio et. al (2019)](https://www.sciencedirect.com/science
 
 We trained **Decision Tree** and **Random Forest** model to classify if a transaction will be a canceled book. We have also use grid search to find the optimal hyper-parameter for Random Forest with the following search space:
 
-
+| Hyper-Parameter | Options |
+| :---: | :---: | 
+| Number of estimators | 100, 500, 1000 | 
+| Maximum number of features | 2, 5, 15, square root of n, log2 of n | 
+| Minimum sample to split | 1, 2, 5 | 
+| Maximum depth of tree | None, 2, 5, 10 | 
 
 The following is the summary of the model performance:
 
+| Model | Accuracy | Recall | Precision | F1 Score | 
+| :---: | :---: | :---: | :---: | :---: | 
+| Decision Tree | 0.791 | 0.623 | 0.632 | 0.627 | 
+| Initial Random Forest | 0.804 | 0.601 | 0.876 | 0.713 | 
+| Tuned Random Forest | 0.809 | 0.608 | 0.880 | 0.720 | 
